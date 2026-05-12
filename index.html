@@ -49,19 +49,6 @@
     transition: height 0.1s;
   }
   textarea:focus, input:focus { outline: none; border-color: #888780; }
-  .meeting-type-row {
-    display: flex; gap: 16px; flex-wrap: wrap;
-    padding: 10px 14px; background: #faf9f4;
-    border: 1px solid #ece9de; border-radius: 8px;
-    margin-top: 12px; margin-bottom: 0; align-items: center;
-  }
-  .meeting-type-row .label-title {
-    font-size: 12px; color: #5f5e5a; font-weight: 500;
-  }
-  .meeting-type-row label {
-    display: inline-flex; align-items: center; gap: 5px;
-    font-size: 13px; cursor: pointer;
-  }
   .btn-row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; align-items: center; }
   button {
     padding: 8px 16px; border: 1px solid #d3d1c7;
@@ -114,16 +101,6 @@
     cursor: pointer; user-select: none;
   }
   .warn:hover { background: #f5e2c4; }
-  .card-mt-row {
-    display: flex; gap: 14px; flex-wrap: wrap;
-    padding: 6px 10px; background: #faf9f4;
-    border-radius: 6px; margin-bottom: 10px; align-items: center;
-  }
-  .card-mt-row .label-title { font-size: 11px; color: #888780; }
-  .card-mt-row label {
-    display: inline-flex; align-items: center; gap: 4px;
-    font-size: 12px; cursor: pointer;
-  }
   .edit-panel {
     display: none; margin-bottom: 10px;
     padding: 10px 12px; background: #faf9f4; border-radius: 8px;
@@ -188,14 +165,6 @@
 優先度&#9;No.&#9;法人名&#9;施設名&#9;住所&#9;電話番号&#9;担当&#9;架電日&#9;架電時間&#9;結果&#9;コメント
 最優先&#9;1&#9;株式会社○○&#9;△△ホーム&#9;福岡市…&#9;092-123-4567&#9;田中 太郎 様&#9;5/15&#9;15:00&#9;アポ&#9;5/20 14時に訪問希望"></textarea>
 
-    <div class="meeting-type-row">
-      <span class="label-title">面談形式（デフォルト）</span>
-      <label><input type="radio" name="meeting-type" value="日程確定" checked> 日程確定</label>
-      <label><input type="radio" name="meeting-type" value="訪問希望"> 訪問希望</label>
-      <label><input type="radio" name="meeting-type" value="日程調整中"> 日程調整中</label>
-      <label><input type="radio" name="meeting-type" value="オンライン"> オンライン</label>
-    </div>
-
     <div class="btn-row">
       <button id="parse-btn" class="primary">整形する<span class="kbd">⌘↵</span></button>
       <button id="sample-btn">サンプル投入</button>
@@ -214,12 +183,13 @@
   <div class="help">
     <h3>判別の仕組み</h3>
     <ul>
-      <li><b>ヘッダー行</b>：「法人名」「電話番号」「担当」など2つ以上のキーワードを含む行をヘッダーと判定（<code>TEL</code>/<code>ご担当者</code>/<code>お客様名</code>などのエイリアスにも対応）</li>
-      <li><b>担当者名</b>：「担当」列の値を直接採用。様/さん付きが他セルにあれば優先</li>
-      <li><b>日程</b>：架電履歴の最新コメントから「アポ/訪問/面談」周辺の日付＋時刻を抽出。結果列が「アポ獲得」なら無印日付も採用</li>
-      <li><b>架電履歴</b>：「架電日」「結果」「コメント」列が複数回ある場合も全て備考に集約</li>
-      <li><b>電話番号</b>：括弧やスペースを除去してハイフン形式に整形</li>
-      <li><b>面談形式</b>：デフォルトを選び、各カードで個別に変更可能</li>
+      <li><b>引用符付きセル対応</b>：スプレッドシートで改行を含むセル（"…\n…"）を正しく1セルとして解釈</li>
+      <li><b>構造の自動推定</b>：ヘッダーがなくても、最初の日付セルを境にベース情報／架電履歴を自動分割</li>
+      <li><b>担当者名</b>：コメント中の「○○様」「○○さん」をセル全体から名前部分だけ抽出して優先採用（担当列の値より優先）</li>
+      <li><b>電話番号</b>：コメント中の「○○に担当いる0123-…」など特定電話があれば優先採用、括弧・スペースをハイフンに正規化</li>
+      <li><b>施設名</b>：施設名＋コメント中の支店名（つつじの丘など）を自動連結</li>
+      <li><b>日程</b>：「訪問希望」「オンライン」「日程調整中」などの種別キーワードを抽出。確定時刻があれば併記</li>
+      <li><b>備考</b>：「アポ獲得」結果のラウンドのコメントをそのまま掲載、住所と他ラウンド要点を末尾に追加</li>
     </ul>
     <h3>ショートカット</h3>
     <ul>
@@ -351,19 +321,26 @@
   }
 
   // --- 担当者抽出 ---
+  // 長文セル中で「○○様」がヒットした場合、セル全体ではなく名前部分のみ返す
+  function extractSamaName(cell){
+    const t = (cell||'').trim();
+    if (!t) return '';
+    if (t.length <= 25 && RE.sama.test(t)) return normalizePerson(t);
+    const m = t.match(RE.samaAnywhere);
+    if (m) return normalizePerson((m[1] + m[2]).trim());
+    return '';
+  }
+
   function extractPersonFromHeader(personCells, allCells){
     const personValues = personCells.filter(c => c && c.length <= 40 && !RE.facility.test(c));
     if (personValues.length){
       const withSama = personValues.find(c => RE.sama.test(c) || RE.samaAnywhere.test(c));
-      return normalizePerson(withSama || personValues[0]);
+      if (withSama) return extractSamaName(withSama);
+      return normalizePerson(personValues[0]);
     }
     for (const c of allCells){
-      if (!c) continue;
-      if (RE.sama.test(c.trim())) return normalizePerson(c);
-    }
-    for (const c of allCells){
-      if (!c) continue;
-      if (RE.samaAnywhere.test(c)) return normalizePerson(c);
+      const n = extractSamaName(c);
+      if (n) return n;
     }
     for (const c of allCells){
       const s = (c||'').trim();
@@ -376,10 +353,8 @@
 
   function extractPersonNoHeader(cells){
     for (const c of cells){
-      if (c && RE.sama.test(c.trim())) return normalizePerson(c);
-    }
-    for (const c of cells){
-      if (c && RE.samaAnywhere.test(c)) return normalizePerson(c);
+      const n = extractSamaName(c);
+      if (n && c.length <= 25) return n; // 短いセルの「様」優先
     }
     for (const c of cells){
       const s = (c||'').trim();
@@ -388,69 +363,139 @@
       if (RE.personSuffix.test(s)) return normalizePerson(s);
     }
     for (const c of cells){
+      const n = extractSamaName(c);
+      if (n) return n;
+    }
+    for (const c of cells){
       const s = (c||'').trim();
       if (/^[一-龥ァ-ヴー]{1,4}[\s　]+[一-龥ァ-ヴー]{1,4}$/.test(s)) return normalizePerson(s);
     }
     return '';
   }
 
+  // --- 引用符付きセルを含むTSVを正しく分解 ---
+  // Googleスプレッドシートからのコピペでは、改行を含むセルが "..." で囲まれる
+  function parseTSV(text){
+    const rows = [];
+    let row = [];
+    let cell = '';
+    let inQuote = false;
+    let cellStart = true; // 現在のセルの先頭にいるか（引用開始判定用）
+    for (let i = 0; i < text.length; i++){
+      const c = text[i];
+      if (inQuote){
+        if (c === '"'){
+          if (text[i+1] === '"'){ cell += '"'; i++; }
+          else { inQuote = false; }
+        } else {
+          cell += c;
+        }
+      } else {
+        if (c === '"' && cellStart){
+          inQuote = true;
+          cellStart = false;
+        } else if (c === '\t'){
+          row.push(cell);
+          cell = '';
+          cellStart = true;
+        } else if (c === '\n' || c === '\r'){
+          if (c === '\r' && text[i+1] === '\n') i++;
+          row.push(cell);
+          rows.push(row);
+          row = [];
+          cell = '';
+          cellStart = true;
+        } else {
+          cell += c;
+          cellStart = false;
+        }
+      }
+    }
+    if (cell.length > 0 || row.length > 0){
+      row.push(cell);
+      rows.push(row);
+    }
+    return rows.filter(r => r.some(c => (c||'').trim() !== ''));
+  }
+
+  // --- セル単位の型判定 ---
+  function isDateCell(s){
+    const t = (s||'').trim();
+    if (!t) return false;
+    if (/^\d{4}[\/\-年]\s?\d{1,2}[\/\-月]\s?\d{1,2}日?$/.test(t)) return true;
+    if (/^\d{1,2}[\/\-月]\s?\d{1,2}日?(?:\s?\([日月火水木金土]\))?$/.test(t)) return true;
+    return false;
+  }
+  function isTimeCell(s){
+    const t = (s||'').trim();
+    if (!t) return false;
+    return /^\d{1,2}[:時](\d{1,2})?(:\d{1,2})?分?半?$/.test(t);
+  }
+  function isPhoneCell(s){
+    const t = (s||'').trim();
+    if (!t) return false;
+    const digits = t.replace(/[^\d]/g, '');
+    if (digits.length < 10 || digits.length > 11) return false;
+    return RE.phoneLoose.test(t);
+  }
+  function isPriorityCell(s){
+    return /^(最優先|優先|通常|低|高|中|S|A|B|C)$/.test((s||'').trim());
+  }
+
+  // --- 面談形式の自動推定 ---
+  function detectMeetingType(text, fallback){
+    if (!text) return fallback;
+    if (/オンライン|ＷＥＢ|web|zoom|teams|google\s*meet|meet\b/i.test(text)) return 'オンライン';
+    if (/日程調整中|調整中|候補日|どちらか|いずれか/.test(text)) return '日程調整中';
+    if (/訪問希望|来訪希望|来社希望|希望/.test(text)) return '訪問希望';
+    if (/確定|決定|お時間|アポ獲得/.test(text)) return '日程確定';
+    return fallback;
+  }
+
   // --- 日時抽出 ---
+  // 日付と時刻を別々に走査して、各日付に対し「次の日付までの範囲」内にある最初の時刻をペアリング
   function extractDateTime(text){
     if (!text) return [];
-    const out = [];
-    const reDate = /(\d{4})[\/\-年]\s?(\d{1,2})[\/\-月]\s?(\d{1,2})日?|(\d{1,2})[\/\-月]\s?(\d{1,2})日?/g;
+    const dateRe = /(\d{4})[\/\-年]\s?(\d{1,2})[\/\-月]\s?(\d{1,2})日?|(\d{1,2})[\/\-月]\s?(\d{1,2})日?/g;
+    const timeRe = /(?:午前|午後|AM|PM|A\.M\.|P\.M\.)?\s?(\d{1,2})[:時]\s?(\d{0,2})\s?(?:分)?(半)?/g;
+
+    const dates = [];
     let m;
-    while ((m = reDate.exec(text)) !== null){
+    while ((m = dateRe.exec(text)) !== null){
       let dateStr;
       if (m[1]) dateStr = `${m[1]}/${m[2]}/${m[3]}`;
       else dateStr = `${m[4]}/${m[5]}`;
-
-      const afterIdx = m.index + m[0].length;
-      const after = text.substring(afterIdx, afterIdx + 30);
-      const tm = after.match(/^\s*(?:\([日月火水木金土]\))?\s*(午前|午後|AM|PM|A\.M\.|P\.M\.)?\s*(\d{1,2})[:時]\s?(\d{0,2})\s?分?(半)?/);
-
-      let timeStr = '';
-      let consumedLen = m[0].length;
-      if (tm){
-        const ampm = tm[1] ? tm[1].replace(/\./g,'') : '';
-        const hh = tm[2];
-        let mm = tm[3] || '';
-        if (tm[4]) mm = '30';
-        if (mm){
-          if (mm.length === 1) mm = '0' + mm;
-          timeStr = (ampm ? ampm + ' ' : '') + hh + ':' + mm;
-        } else {
-          timeStr = (ampm ? ampm + ' ' : '') + hh + '時';
-        }
-        consumedLen += tm[0].length;
-      }
-
-      out.push({
-        date: dateStr,
-        time: timeStr,
-        idx: m.index,
-        ctx: text.substring(Math.max(0, m.index - 25), Math.min(text.length, m.index + consumedLen + 25))
-      });
+      dates.push({ date: dateStr, idx: m.index, len: m[0].length });
     }
-    return out;
-  }
 
-  function analyzeCommentForDates(comment, isApoResult){
-    if (!comment) return { appointment: '', recall: '' };
-    const dts = extractDateTime(comment);
-    const appointment = [];
-    const recall = [];
-    dts.forEach(d => {
-      const ctx = d.ctx;
-      const display = d.date + (d.time ? ' ' + d.time : '');
-      if (RE.apoContext.test(ctx)) appointment.push(display);
-      else if (RE.recallContext.test(ctx)) recall.push(display);
-      else if (isApoResult) appointment.push(display);
+    const times = [];
+    while ((m = timeRe.exec(text)) !== null){
+      const hh = m[1];
+      let mm = m[2] || '';
+      if (m[3]) mm = '30';
+      let timeStr;
+      if (mm){
+        if (mm.length === 1) mm = '0' + mm;
+        timeStr = `${hh}:${mm}`;
+      } else {
+        timeStr = `${hh}時`;
+      }
+      // 日付内の数字に重ならないようチェック（後で除外）
+      times.push({ time: timeStr, idx: m.index, len: m[0].length });
+    }
+
+    const out = [];
+    dates.forEach((d, i) => {
+      const nextDateIdx = i + 1 < dates.length ? dates[i+1].idx : text.length;
+      const searchStart = d.idx + d.len;
+      const searchEnd = nextDateIdx;
+      const tCand = times.find(t => t.idx >= searchStart && t.idx + t.len <= searchEnd);
+      const timeStr = tCand ? tCand.time : '';
+      const ctxEnd = Math.min(text.length, (tCand ? tCand.idx + tCand.len : searchStart) + 25);
+      const ctx = text.substring(Math.max(0, d.idx - 25), ctxEnd);
+      out.push({ date: d.date, time: timeStr, idx: d.idx, ctx });
     });
-    return {
-      appointment: appointment.join(' / '),
-      recall: recall.join(' / ')
-    };
+    return out;
   }
 
   // --- パース：ヘッダー付き ---
@@ -499,158 +544,230 @@
         if (RE.phone.test(c)){ fields.phone = normalizePhone(c); break; }
       }
     }
-    if (!fields.mail){
-      for (const c of cells){
-        const m = (c||'').match(RE.mailLoose);
-        if (m){ fields.mail = m[1]; break; }
-      }
-    }
 
     const validCalls = callRounds.filter(c => c.date || c.result || c.comment || c.time);
-    const latest = validCalls.length ? validCalls[validCalls.length - 1] : null;
+    return finalizeRecord(fields, validCalls);
+  }
 
-    const scheduleParts = [];
-    const recallParts = [];
-    let isApo = false;
-    if (latest){
-      isApo = RE.apoResult.test(latest.result || '');
-      const a = analyzeCommentForDates(latest.comment || '', isApo);
-      if (a.appointment) scheduleParts.push(a.appointment);
-      if (a.recall) recallParts.push(a.recall);
-      if (isApo && !scheduleParts.length){
-        const dts = extractDateTime(latest.comment || '');
-        if (dts.length){
-          scheduleParts.push(dts[0].date + (dts[0].time ? ' ' + dts[0].time : ''));
-        } else if (latest.date){
-          scheduleParts.push(latest.date + (latest.time ? ' ' + latest.time : ''));
+  // --- パース：ヘッダーなし（スマート推定） ---
+  // 構造を自動推定：先頭はベース情報、最初の日付セル以降は架電履歴の繰り返し
+  function parseSmartRow(cells){
+    cells = cells.map(s => (s||'').trim());
+
+    // タブ区切りでなく、カンマ区切り・スペース区切りの場合の対応
+    if (cells.length === 1){
+      const line = cells[0];
+      if ((line.match(/,/g)||[]).length >= 3) cells = line.split(',').map(s=>s.trim());
+      else if (/[ 　]{2,}/.test(line)) cells = line.split(/[ 　]{2,}/).map(s=>s.trim());
+    }
+
+    // 最初の「日付セル」位置を検出
+    let firstDateIdx = -1;
+    for (let i = 0; i < cells.length; i++){
+      if (isDateCell(cells[i])){ firstDateIdx = i; break; }
+    }
+
+    const baseCells = firstDateIdx >= 0 ? cells.slice(0, firstDateIdx) : cells.slice();
+    const tailCells = firstDateIdx >= 0 ? cells.slice(firstDateIdx) : [];
+
+    // ベース情報の分類
+    const fields = {
+      priority: '', no: '', corporation: '', facility: '', address: '',
+      phone: '', person: '', mail: ''
+    };
+    const personCandidates = [];
+
+    baseCells.forEach(c => {
+      if (!c) return;
+      // メール
+      if (RE.mailLoose.test(c)){
+        if (!fields.mail) fields.mail = normalizeMail(c);
+        return;
+      }
+      // 電話
+      if (isPhoneCell(c)){
+        if (!fields.phone) fields.phone = normalizePhone(c);
+        return;
+      }
+      // 優先度
+      if (isPriorityCell(c)){
+        if (!fields.priority) fields.priority = c;
+        return;
+      }
+      // No.
+      if (/^\d+$/.test(c) && c.length <= 4){
+        if (!fields.no) { fields.no = c; return; }
+      }
+      // 住所（都道府県・市区町村を含むかつ番地っぽい）
+      if (RE.address.test(c) && c.length >= 6 && !fields.address){
+        fields.address = c;
+        return;
+      }
+      // 法人名 vs 施設名
+      if (RE.facility.test(c)){
+        const isCorp = /(株式会社|有限会社|合同会社|社会福祉法人|医療法人|学校法人|一般財団法人|公益財団法人|NPO法人|\(株\)|（株）|HD|ホールディングス|グループ|商事|不動産|電鉄|販売|建設|工業|製作所|食品|物産|機構|協会|学園)/.test(c);
+        if (isCorp && !fields.corporation){ fields.corporation = c; return; }
+        if (!fields.facility){ fields.facility = c; return; }
+        if (!fields.corporation){ fields.corporation = c; return; }
+      }
+      personCandidates.push(c);
+    });
+
+    // 担当者：「様」付きを最優先、なければ残りセルの最初を採用
+    fields.person = extractPersonFromHeader(personCandidates, personCandidates);
+    if (!fields.person && personCandidates.length){
+      const cand = personCandidates.find(c => c.length <= 30 && !RE.address.test(c) && !RE.facility.test(c));
+      if (cand) fields.person = normalizePerson(cand);
+    }
+
+    // 架電履歴：（日付, [時刻], [結果], [コメント]）の繰り返し
+    const callRounds = [];
+    let i = 0;
+    while (i < tailCells.length){
+      if (!isDateCell(tailCells[i])){ i++; continue; }
+      const round = { date: tailCells[i] };
+      i++;
+      if (i < tailCells.length && isTimeCell(tailCells[i])){
+        round.time = tailCells[i]; i++;
+      }
+      // 結果セル：短いテキストで、日付・時刻・空でない
+      if (i < tailCells.length && tailCells[i] && !isDateCell(tailCells[i]) && !isTimeCell(tailCells[i]) && tailCells[i].length <= 30){
+        round.result = tailCells[i]; i++;
+      } else if (i < tailCells.length && tailCells[i] === ''){
+        i++; // 空欄スキップ
+      }
+      // コメントセル：次が日付でなければコメント
+      if (i < tailCells.length && !isDateCell(tailCells[i])){
+        if (tailCells[i]) round.comment = tailCells[i];
+        i++;
+      }
+      callRounds.push(round);
+    }
+
+    return finalizeRecord(fields, callRounds);
+  }
+
+  // --- 共通：最終出力用のレコード生成 ---
+  function finalizeRecord(fields, callRounds){
+    // 重複ラウンド除去
+    const seen = new Set();
+    const uniqueCalls = [];
+    callRounds.forEach(r => {
+      const sig = `${r.date||''}|${r.time||''}|${r.result||''}|${(r.comment||'').slice(0,20)}`;
+      if (seen.has(sig)) return;
+      seen.add(sig);
+      uniqueCalls.push(r);
+    });
+
+    const allComments = uniqueCalls.map(c => c.comment || '').filter(Boolean);
+    const allCommentsText = allComments.join('\n');
+
+    // クロスラウンド：メール
+    if (!fields.mail){
+      const m = allCommentsText.match(RE.mailLoose);
+      if (m) fields.mail = m[1];
+    }
+
+    // クロスラウンド：支店名と特定電話（「○○に担当いる0123-...」パターン）
+    let branchName = '';
+    let branchPhone = '';
+    for (const cm of allComments){
+      if (!branchName){
+        const bm = cm.match(/([一-龥ぁ-んァ-ヴー々]{2,15}?)(?:に担当|担当いる|の方が担当|の担当|担当者は)/);
+        if (bm) branchName = bm[1];
+      }
+      if (!branchPhone){
+        const phm = cm.match(RE.phoneLoose);
+        if (phm){
+          const phoneStr = normalizePhone(phm[1]);
+          if (phoneStr !== fields.phone) branchPhone = phoneStr;
         }
       }
+      if (branchName && branchPhone) break;
     }
-    fields.schedule = scheduleParts.join(' / ');
 
-    let facilityCombined;
-    if (fields.corporation && fields.facility){
-      if (fields.corporation === fields.facility
-          || fields.corporation.includes(fields.facility)
-          || fields.facility.includes(fields.corporation)){
-        facilityCombined = fields.facility.length >= fields.corporation.length ? fields.facility : fields.corporation;
-      } else {
-        facilityCombined = fields.corporation + ' / ' + fields.facility;
+    // 電話番号：コメント中の特定電話があれば優先
+    const finalPhone = branchPhone || fields.phone || '';
+
+    // 担当者：コメント中の「○○様」があれば優先
+    let finalPerson = '';
+    for (const cm of allComments){
+      const samaName = extractSamaName(cm);
+      if (samaName){ finalPerson = samaName; break; }
+    }
+    if (!finalPerson) finalPerson = fields.person || '';
+
+    // 施設名：施設 (+ 支店) を優先、なければ法人名
+    let facilityCombined = fields.facility || fields.corporation || '';
+    if (branchName){
+      facilityCombined = facilityCombined ? (facilityCombined + '　' + branchName) : branchName;
+    }
+
+    // アポ獲得ラウンドを優先採用
+    const apoCall = [...uniqueCalls].reverse().find(c => RE.apoResult.test(c.result || ''));
+    const latest = apoCall || (uniqueCalls.length ? uniqueCalls[uniqueCalls.length - 1] : null);
+
+    // 日程：種別キーワード優先。時刻に「以降/頃/あたり/前後」など曖昧表現があれば種別のみ採用
+    let scheduleStr = '';
+    if (latest){
+      const cm = latest.comment || '';
+      const mt = detectMeetingType(cm, null);
+      const dts = extractDateTime(cm);
+      const hasTime = dts.length > 0 && dts[0].time;
+      const dateTimeStr = dts.length ? (dts[0].date + (dts[0].time ? ' ' + dts[0].time : '')) : '';
+      const uncertain = /(以降|以前|頃|あたり|前後|そのあたり|くらい|ぐらい)/.test(cm);
+
+      if (mt && uncertain){
+        scheduleStr = mt; // 時刻が曖昧 → 種別のみ
+      } else if (mt === 'オンライン' || mt === '日程調整中'){
+        scheduleStr = mt;
+        if (hasTime) scheduleStr += '（' + dateTimeStr + '）';
+      } else if (mt === '訪問希望' || mt === '日程確定'){
+        scheduleStr = hasTime ? (dateTimeStr + '（' + mt + '）') : (dts.length ? (dts[0].date + ' ' + mt) : mt);
+      } else if (dateTimeStr) {
+        scheduleStr = dateTimeStr;
       }
-    } else {
-      facilityCombined = fields.corporation || fields.facility || '';
     }
 
-    const noteParts = [];
-    if (fields.priority) noteParts.push('優先度：' + fields.priority);
-    if (fields.no) noteParts.push('No.' + fields.no);
-    if (fields.address) noteParts.push('住所：' + fields.address);
-
-    if (validCalls.length){
-      noteParts.push('【架電履歴】');
-      validCalls.forEach((c, idx) => {
-        const p = [(idx + 1) + '回目'];
-        if (c.date) p.push(c.date);
-        if (c.time) p.push(c.time);
-        if (c.result) p.push(c.result);
-        if (c.comment) p.push(c.comment);
-        noteParts.push(p.join(' '));
-      });
-    }
-    if (recallParts.length){
-      noteParts.push('再架電予定：' + recallParts.join(' / '));
+    // 備考：アポ獲得ラウンドのコメントをそのまま（改行整理のみ）
+    let noteStr = '';
+    if (latest && latest.comment){
+      noteStr = latest.comment.replace(/\r/g, '').replace(/\n{2,}/g, '\n').trim();
     }
 
     const warnings = [];
-    if (!fields.phone) warnings.push('電話番号なし');
-    if (!fields.person) warnings.push('担当者名なし');
+    if (!finalPhone) warnings.push('電話番号なし');
+    if (!finalPerson) warnings.push('担当者名なし');
     if (!facilityCombined) warnings.push('施設名なし');
-    if (!fields.schedule && validCalls.length && isApo){
+    if (!scheduleStr && latest && RE.apoResult.test(latest.result || '')){
       warnings.push('日程未抽出／要確認');
     }
 
     return {
-      schedule: fields.schedule,
+      schedule: scheduleStr,
       facility: facilityCombined,
-      person: fields.person,
-      phone: fields.phone,
-      mail: fields.mail,
-      note: noteParts.join('\n'),
-      warnings
-    };
-  }
-
-  // --- パース：ヘッダーなし ---
-  function parseRowSimple(line){
-    let cells;
-    if (line.includes('\t')) cells = line.split('\t');
-    else if ((line.match(/,/g) || []).length >= 3) cells = line.split(',');
-    else cells = line.split(/[ 　]{2,}/);
-    cells = cells.map(s => s.trim());
-
-    const buckets = { schedule: [], facility: [], phone: [], mail: [], address: [], note: [] };
-    const warnings = [];
-    const person = extractPersonNoHeader(cells);
-
-    cells.forEach(cell => {
-      if (!cell || cell === person) return;
-      if (RE.mailLoose.test(cell)){ buckets.mail.push(normalizeMail(cell)); return; }
-      const digits = cell.replace(/[^\d]/g,'');
-      if (RE.phoneLoose.test(cell) && digits.length >= 10 && digits.length <= 11){
-        buckets.phone.push(normalizePhone(cell)); return;
-      }
-      if (RE.address.test(cell) && cell.length >= 6){ buckets.address.push(cell); return; }
-      if (/(\d{1,2})[\/\-月]\s?(\d{1,2})日?/.test(cell) || /\d{1,2}[:時]\d{0,2}/.test(cell)){
-        buckets.schedule.push(cell); return;
-      }
-      if (RE.facility.test(cell)){ buckets.facility.push(cell); return; }
-      if (cell.length >= 6 && buckets.facility.length === 0){
-        buckets.facility.push(cell);
-        warnings.push('施設名は推定');
-      } else {
-        buckets.note.push(cell);
-      }
-    });
-
-    if (!person) warnings.push('担当者名なし');
-    if (!buckets.facility.length) warnings.push('施設名なし');
-    if (!buckets.phone.length) warnings.push('電話番号なし');
-
-    const noteParts = [];
-    if (buckets.address.length) noteParts.push('住所：' + buckets.address.join(' / '));
-    if (buckets.note.length) noteParts.push(buckets.note.join(' / '));
-
-    return {
-      schedule: buckets.schedule.join(' '),
-      facility: buckets.facility.join(' / '),
-      person,
-      phone: buckets.phone.join(' / '),
-      mail: buckets.mail.join(' / '),
-      note: noteParts.join('\n'),
+      person: finalPerson,
+      phone: finalPhone,
+      mail: fields.mail || '',
+      note: noteStr,
       warnings
     };
   }
 
   // --- レンダリング ---
   let records = [];
-  const MEETING_TYPES = ['日程確定','訪問希望','日程調整中','オンライン'];
-
-  function getDefaultMeetingType(){
-    const r = document.querySelector('input[name="meeting-type"]:checked');
-    return r ? r.value : '日程確定';
-  }
 
   function renderReportText(r){
     const name = reporter.value.trim();
-    return '【アポ獲得報告】\n\n'
-      + '面談形式：' + (r.meetingType || '') + '\n'
+    let out = '【アポ獲得報告】\n'
       + '日程：' + (r.schedule || '') + '\n'
       + '施設名：' + (r.facility || '') + '\n'
       + '担当者名：' + (r.person || '') + '\n'
       + '電話番号：' + (r.phone || '') + '\n'
       + 'メールアドレス：' + (r.mail || '') + '\n'
-      + '備考：\n' + (r.note || '') + '\n'
-      + '報告者：' + name;
+      + '備考：' + (r.note || '');
+    if (name) out += '\n報告者：' + name;
+    return out;
   }
 
   function escapeHtml(s){
@@ -663,9 +780,6 @@
       ? r.warnings.map(w => `<span class="warn" data-warn="${escapeHtml(w)}">⚠ ${escapeHtml(w)}</span>`).join(' ')
       : '';
     const idxLabel = records.length > 1 ? `<span class="result-index">#${i + 1}</span>` : '';
-    const mtRow = MEETING_TYPES.map(opt =>
-      `<label><input type="radio" name="card-mt-${i}" value="${opt}" ${r.meetingType === opt ? 'checked' : ''}> ${opt}</label>`
-    ).join('');
     const hasWarn = r.warnings && r.warnings.length ? ' has-warn' : '';
 
     return `
@@ -677,9 +791,6 @@
             <button class="card-edit">✎ 修正</button>
             ${records.length > 1 ? '<button class="card-remove ghost">削除</button>' : ''}
           </div>
-        </div>
-        <div class="card-mt-row">
-          <span class="label-title">面談形式</span>${mtRow}
         </div>
         <div class="edit-panel">
           <div class="field-row" data-field="schedule"><span class="field-label">日程</span><input class="field-edit" data-key="schedule" value="${escapeHtml(r.schedule)}"/></div>
@@ -753,13 +864,6 @@
         });
       }
 
-      card.querySelectorAll(`input[name="card-mt-${idx}"]`).forEach(rd=>{
-        rd.addEventListener('change', ()=>{
-          records[idx].meetingType = rd.value;
-          card.querySelector('.body').textContent = renderReportText(records[idx]);
-        });
-      });
-
       card.querySelectorAll('.field-edit').forEach(inp=>{
         inp.addEventListener('input', ()=>{
           records[idx][inp.dataset.key] = inp.value;
@@ -788,33 +892,29 @@
 
   // --- パース実行 ---
   function doParse(){
-    const rawLines = input.value
-      .replace(/\r/g, '')
-      .split(/\n/)
-      .filter(l => l.trim().length > 0);
-    if (!rawLines.length){
+    // 引用符付きセル（改行を含むGoogleスプレッドシートのコピペ）を正しく分解
+    const rows = parseTSV(input.value);
+    if (!rows.length){
       records = [];
       renderAll();
       return;
     }
 
+    // ヘッダー検出は1行目のセル列で判定
     let headerMap = null;
-    let dataLines = rawLines;
-    if (detectHeader(rawLines[0])){
-      const headerCells = rawLines[0].split('\t');
-      headerMap = headerCells.map(h => classifyHeader(h));
-      dataLines = rawLines.slice(1);
+    let dataRows = rows;
+    if (rows.length >= 2 && detectHeader(rows[0].join('\t'))){
+      headerMap = rows[0].map(h => classifyHeader(h));
+      dataRows = rows.slice(1);
     }
-    dataLines = dataLines.filter(l => {
-      const cells = l.split('\t').map(s => s.trim()).filter(Boolean);
-      return cells.length >= 2;
-    });
+    dataRows = dataRows.filter(cells => cells.some(c => (c||'').trim()));
 
-    const defaultMT = getDefaultMeetingType();
-    records = dataLines.map(line => {
-      const parsed = headerMap ? parseRowWithHeader(line, headerMap) : parseRowSimple(line);
-      parsed.meetingType = defaultMT;
-      return parsed;
+    records = dataRows.map(cells => {
+      if (headerMap){
+        // ヘッダー有りの場合はラインに戻して既存ロジック流用
+        return parseRowWithHeader(cells.join('\t'), headerMap);
+      }
+      return parseSmartRow(cells);
     });
 
     renderAll();
@@ -861,12 +961,10 @@
   });
 
   // --- サンプル ---
+  // ヘッダーなし・引用符付き複数行セル・複数ラウンドの実データに近い形
   sampleBtn.addEventListener('click', ()=>{
     input.value =
-      '優先度\tNo.\t法人名\t施設名\t住所\t電話番号\tご担当者\t架電日\t架電時間\t結果\tコメント\t架電日\t架電時間\t結果\tコメント\n'
-      + '最優先\t1\t社会福祉法人○○会\t△△有料老人ホーム\t福岡市博多区博多駅前1-1-1\t092-123-4567\t田中 太郎 様\t5/10\t14:00\t不在\t5/15に再架電希望\t5/15\t15:00\tアポ獲得\t5/20(火) 14時に訪問希望、本部にも要報告\n'
-      + '優先\t2\t株式会社△△ホールディングス\t○○リゾート\t沖縄県那覇市旭町1-9\t(098) 987-6543\t鈴木\t5/12\t10:30\tアポ\t5/22 15:00 オンライン面談OK suzuki@example.com\t\t\t\t\n'
-      + '通常\t3\t医療法人□□会\t△△クリニック\t札幌市中央区南1条\t011-555-7890\t佐々木 部長\t5/11\t13:00\tアポ\t6月初旬で日程調整中、6/2か6/3希望\t\t\t\t';
+      '\t\t医療法人社団親和会\t住宅型有料老人ホーム　アフィニティーすいせん\t飯塚市伊岐須166-6\t0948-43-3340\tイン岩崎\t2026/04/02\t15:28:01\tアポ獲得\t"本日休み、来週火水木出勤\n\n5/12 訪問希望　大体14:30以降であればありがたいとのこと"\t1/28\t9:44\t不在\tつつじの丘に担当いる0948-57-4150\t2/6\t9:56\t資料請求\t人足りなくて時間取れないため資料着地、徳田様ti@f-shinwakai.or.jp\t2026/04/02\t15:28:01\tアポ獲得\t"本日休み、来週火水木出勤\n\n5/12 訪問希望　大体14:30以降であればありがたいとのこと"\t';
     autoResize();
     doParse();
   });
