@@ -36,6 +36,43 @@
     border-radius: 6px; font-size: 14px; font-family: inherit;
   }
   .name-saved { font-size: 12px; color: #0f6e56; }
+  .name-row select {
+    flex: 1; min-width: 180px;
+    padding: 8px 12px; border: 1px solid #d3d1c7;
+    border-radius: 6px; font-size: 14px; font-family: inherit;
+    background: #fff;
+  }
+  .project-panel {
+    margin-top: 12px; padding: 12px 14px;
+    background: #faf9f4; border: 1px solid #ece9de;
+    border-radius: 8px;
+  }
+  .project-help {
+    font-size: 11px; color: #5f5e5a; margin-bottom: 8px;
+  }
+  .project-help code {
+    background: #fff; padding: 1px 5px; border-radius: 3px;
+    font-size: 11px; font-family: "SF Mono", Consolas, monospace;
+  }
+  .project-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+  .project-item {
+    display: grid; grid-template-columns: 160px 1fr auto;
+    gap: 6px; align-items: center;
+  }
+  .project-item input {
+    padding: 6px 10px; border: 1px solid #d3d1c7;
+    border-radius: 5px; font-size: 12px; font-family: inherit;
+  }
+  .project-item .project-remove {
+    padding: 4px 10px; font-size: 12px;
+    color: #a55b5b; border-color: transparent;
+  }
+  .project-item .project-remove:hover {
+    background: #faecec; border-color: #e0c5c5;
+  }
+  @media (max-width: 600px) {
+    .project-item { grid-template-columns: 1fr; }
+  }
   .panel-label {
     display: block; font-size: 13px; color: #5f5e5a;
     font-weight: 500; margin-bottom: 8px;
@@ -157,6 +194,18 @@
       <input id="reporter" type="text" placeholder="例：佐藤" />
       <span class="name-saved" id="saved-msg"></span>
     </div>
+    <div class="name-row">
+      <label>プロジェクト</label>
+      <select id="project-select">
+        <option value="">（メンションなし）</option>
+      </select>
+      <button id="project-edit-btn" class="ghost">編集</button>
+    </div>
+    <div class="project-panel" id="project-panel" style="display:none;">
+      <div class="project-help">プロジェクト名と Slack メンション（<code>@田中 @鈴木</code> のように半角スペース区切り）を登録できます</div>
+      <div class="project-list" id="project-list"></div>
+      <button id="project-add" class="ghost">+ プロジェクト追加</button>
+    </div>
   </header>
 
   <div class="panel">
@@ -215,6 +264,11 @@
   const summaryBar = $('summary-bar');
   const summaryCount = $('summary-count');
   const summaryWarn = $('summary-warn');
+  const projectSelect = $('project-select');
+  const projectEditBtn = $('project-edit-btn');
+  const projectPanel = $('project-panel');
+  const projectList = $('project-list');
+  const projectAddBtn = $('project-add');
 
   // --- 報告者名 localStorage ---
   const STORAGE_KEY = 'alphadrive_apo_reporter_name';
@@ -235,6 +289,106 @@
       renderAll();
     }, 300);
   });
+
+  // --- プロジェクト管理 localStorage ---
+  const PROJECTS_KEY = 'alphadrive_apo_projects';
+  const PROJECT_SELECTED_KEY = 'alphadrive_apo_project_selected';
+  let projects = []; // [{name: 'プロジェクトA', mentions: '@田中 @鈴木'}]
+  let selectedProjectIdx = -1; // -1 = no mention
+
+  function loadProjects(){
+    try {
+      const saved = localStorage.getItem(PROJECTS_KEY);
+      if (saved){
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) projects = parsed;
+      }
+      const sel = localStorage.getItem(PROJECT_SELECTED_KEY);
+      if (sel !== null) selectedProjectIdx = parseInt(sel, 10);
+      if (isNaN(selectedProjectIdx)) selectedProjectIdx = -1;
+    } catch(e) {}
+  }
+  function saveProjects(){
+    try {
+      localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
+      localStorage.setItem(PROJECT_SELECTED_KEY, String(selectedProjectIdx));
+    } catch(e) {}
+  }
+  function renderProjectSelect(){
+    const cur = selectedProjectIdx;
+    projectSelect.innerHTML = '<option value="-1">（メンションなし）</option>'
+      + projects.map((p, i) => `<option value="${i}" ${i === cur ? 'selected' : ''}>${escapeHtml(p.name || '（無名）')}</option>`).join('');
+    projectSelect.value = String(cur);
+  }
+  function renderProjectList(){
+    projectList.innerHTML = projects.map((p, i) => `
+      <div class="project-item" data-idx="${i}">
+        <input class="project-name" value="${escapeHtml(p.name || '')}" placeholder="プロジェクト名" />
+        <input class="project-mentions" value="${escapeHtml(p.mentions || '')}" placeholder="@田中 @鈴木" />
+        <button class="project-remove" type="button">削除</button>
+      </div>
+    `).join('');
+    projectList.querySelectorAll('.project-item').forEach(item => {
+      const idx = +item.dataset.idx;
+      const nameInp = item.querySelector('.project-name');
+      const menInp = item.querySelector('.project-mentions');
+      const debouncedUpdate = (() => {
+        let t;
+        return () => {
+          clearTimeout(t);
+          t = setTimeout(() => {
+            projects[idx].name = nameInp.value;
+            projects[idx].mentions = menInp.value;
+            saveProjects();
+            renderProjectSelect();
+            renderAll();
+          }, 300);
+        };
+      })();
+      nameInp.addEventListener('input', debouncedUpdate);
+      menInp.addEventListener('input', debouncedUpdate);
+      item.querySelector('.project-remove').addEventListener('click', () => {
+        projects.splice(idx, 1);
+        if (selectedProjectIdx === idx) selectedProjectIdx = -1;
+        else if (selectedProjectIdx > idx) selectedProjectIdx--;
+        saveProjects();
+        renderProjectList();
+        renderProjectSelect();
+        renderAll();
+      });
+    });
+  }
+
+  loadProjects();
+  renderProjectSelect();
+  renderProjectList();
+
+  projectSelect.addEventListener('change', () => {
+    selectedProjectIdx = parseInt(projectSelect.value, 10);
+    if (isNaN(selectedProjectIdx)) selectedProjectIdx = -1;
+    saveProjects();
+    renderAll();
+  });
+  projectEditBtn.addEventListener('click', () => {
+    const open = projectPanel.style.display !== 'none';
+    projectPanel.style.display = open ? 'none' : 'block';
+    projectEditBtn.textContent = open ? '編集' : '閉じる';
+  });
+  projectAddBtn.addEventListener('click', () => {
+    projects.push({ name: '', mentions: '' });
+    saveProjects();
+    renderProjectList();
+    renderProjectSelect();
+    // 追加した行の名前にフォーカス
+    const items = projectList.querySelectorAll('.project-item');
+    const last = items[items.length - 1];
+    if (last) last.querySelector('.project-name').focus();
+  });
+
+  function getActiveMentions(){
+    if (selectedProjectIdx < 0 || !projects[selectedProjectIdx]) return '';
+    return (projects[selectedProjectIdx].mentions || '').trim();
+  }
 
   // --- 正規表現 ---
   const RE = {
@@ -759,7 +913,10 @@
 
   function renderReportText(r){
     const name = reporter.value.trim();
-    let out = '【アポ獲得報告】\n'
+    const mentions = getActiveMentions();
+    let out = '';
+    if (mentions) out += mentions + '\n';
+    out += '【アポ獲得報告】\n'
       + '日程：' + (r.schedule || '') + '\n'
       + '施設名：' + (r.facility || '') + '\n'
       + '担当者名：' + (r.person || '') + '\n'
